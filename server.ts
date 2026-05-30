@@ -2,11 +2,27 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import makeWASocket, {
-  useMultiFileAuthState,
-  delay
-} from "@whiskeysockets/baileys";
+import * as baileys from "@whiskeysockets/baileys";
 import pino from "pino";
+
+// Safe extraction helper to prevent bundler inline/default optimizations
+const getWASocket = (): any => {
+  const b = baileys as any;
+  if (typeof b.default === "function") {
+    return b.default;
+  }
+  if (b.default && typeof b.default.default === "function") {
+    return b.default.default;
+  }
+  if (typeof b === "function") {
+    return b;
+  }
+  return b;
+};
+
+const makeWASocket = getWASocket();
+const useMultiFileAuthState = baileys.useMultiFileAuthState;
+const delay = baileys.delay;
 
 // Define structured types
 interface WAConnectedUser {
@@ -206,15 +222,21 @@ class WhatsAppManager {
       throw new Error('Nomor telepon tidak valid. Pastikan hanya berupa angka.');
     }
 
+    // Since this is a manual, fresh user connection request, completely log out past session first
     await this.logout();
 
     this.status = 'CONNECTING';
     this.phoneNumber = cleanNumber;
     this.error = null;
 
+    await this.initSocket(cleanNumber, true);
+  }
+
+  async initSocket(phoneNumber: string, requestNewPairing = false) {
     try {
       const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
 
+      // Create a fresh socket referencing existing or clean auth state
       this.socket = makeWASocket({
         auth: state,
         printQRInTerminal: false,
@@ -222,12 +244,19 @@ class WhatsAppManager {
         browser: ['Chrome (Linux)', 'Chrome', '114.0.0.0']
       });
 
-      // Request Pairing Code if credentials don't exist yet
-      if (!this.socket.authState.creds.registered) {
-        await delay(2000); // Wait 2s for state configuration
-        const code = await this.socket.requestPairingCode(cleanNumber);
-        this.pairingCode = code;
-        console.log(`Pairing code generated for ${cleanNumber}: ${code}`);
+      // Request pairing code only when user initiates a fresh run AND is unregistered
+      if (!this.socket.authState.creds.registered && requestNewPairing) {
+        await delay(2500); // Give socket a moment to establish noise handshake
+        try {
+          const code = await this.socket.requestPairingCode(phoneNumber);
+          this.pairingCode = code;
+          console.log(`Pairing code generated for ${phoneNumber}: ${code}`);
+        } catch (err: any) {
+          console.error(`Gagal membuat pairing code untuk nomor ${phoneNumber}:`, err);
+          this.error = `Gagal mendapatkan kode OTP dari WhatsApp: ${err.message || err}`;
+          this.status = 'DISCONNECTED';
+          this.pairingCode = null;
+        }
       }
 
       this.socket.ev.on('creds.update', saveCreds);
@@ -236,41 +265,49 @@ class WhatsAppManager {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'connecting') {
-          this.status = 'CONNECTING';
+          if (this.status !== 'CONNECTED') {
+            this.status = 'CONNECTING';
+          }
         }
 
         if (connection === 'open') {
           this.status = 'CONNECTED';
           this.pairingCode = null;
+          this.error = null;
           const userObj = this.socket.user;
           this.connectedUser = {
-            id: userObj?.id || cleanNumber,
-            name: userObj?.name || cleanNumber
+            id: userObj?.id || phoneNumber,
+            name: userObj?.name || phoneNumber
           };
-          console.log(`WhatsApp loaded session open: ${userObj?.id}`);
+          console.log(`WhatsApp connection is OPEN. Registered user: ${userObj?.id}`);
         }
 
         if (connection === 'close') {
           const reasonCode = (lastDisconnect?.error as any)?.output?.statusCode;
-          console.log(`Connection closed with code: ${reasonCode}`);
+          console.log(`WhatsApp connection closed with code: ${reasonCode}`);
 
           if (reasonCode === 401) {
-            console.log('Session unauthenticated or expired. Cleared directory.');
+            console.log('Session is unauthenticated or revoked (401). Cleaning up state...');
             this.logout();
           } else {
-            // Keep trying to reconnect unless phone number has been deleted
-            this.status = 'CONNECTING';
+            // Reconnect using the same credentials and keys.
+            // DO NOT delete files! DO NOT call logout()! DO NOT request a new pairing code!
             if (this.phoneNumber) {
-              console.log('Attempting reconnection stream in 4 seconds...');
+              console.log(`Disconnected. Reconnecting stream for ${this.phoneNumber} in 4 seconds...`);
               setTimeout(() => {
-                if (this.phoneNumber) this.connect(this.phoneNumber);
+                if (this.phoneNumber) {
+                  // Connect back without requesting a new pairing code (keeps existing code valid on UI if still connecting)
+                  this.initSocket(this.phoneNumber, false);
+                }
               }, 4000);
+            } else {
+              this.status = 'DISCONNECTED';
             }
           }
         }
       });
 
-      // Listens for real-time messages
+      // Listen for real-time incoming or outgoing messages
       this.socket.ev.on('messages.upsert', (data: any) => {
         if (data && data.messages) {
           for (const msg of data.messages) {
@@ -279,10 +316,10 @@ class WhatsAppManager {
         }
       });
 
-      // Listens for historical sync set
+      // Listen for initial historical chats/messages load
       this.socket.ev.on('messaging-history.set', (data: any) => {
         if (data && data.messages) {
-          console.log(`Syncing ${data.messages.length} default historic messages...`);
+          console.log(`Syncing ${data.messages.length} historical messages...`);
           for (const msg of data.messages) {
             this.addMessage(msg);
           }
@@ -290,81 +327,31 @@ class WhatsAppManager {
       });
 
     } catch (err: any) {
-      console.error('Core Baileys initialization crash:', err);
-      this.status = 'DISCONNECTED';
-      this.error = err.message || 'Gagal memulai koneksi WhatsApp.';
+      console.error('Core Baileys initialization crash in initSocket:', err);
+      if (this.status !== 'CONNECTED') {
+        this.status = 'DISCONNECTED';
+        this.error = err.message || 'Gagal memulai koneksi WhatsApp.';
+      }
     }
   }
 
   async autoReconnect() {
     const credsPath = path.join(this.authPath, 'creds.json');
     if (fs.existsSync(credsPath)) {
-      console.log('Saved WhatsApp credentials file found. Booting session autoReconnect...');
+      console.log('Saved WhatsApp credentials file found. Performing silent auto-reconnect...');
       try {
         const raw = fs.readFileSync(credsPath, 'utf8');
         const parsed = JSON.parse(raw);
         const pairingPhone = parsed.me?.id?.split(':')[0] || parsed.me?.id?.split('@')[0];
         
         if (pairingPhone) {
-          console.log(`Auto connecting back to phone: ${pairingPhone}`);
+          console.log(`Auto reconnecting to phone: ${pairingPhone}`);
           this.status = 'CONNECTING';
           this.phoneNumber = pairingPhone;
-
-          const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
-
-          this.socket = makeWASocket({
-            auth: state,
-            printQRInTerminal: false,
-            logger: pino({ level: 'silent' }),
-            browser: ['Chrome (Linux)', 'Chrome', '114.0.0.0']
-          });
-
-          this.socket.ev.on('creds.update', saveCreds);
-
-          this.socket.ev.on('connection.update', (update: any) => {
-            const { connection, lastDisconnect } = update;
-            
-            if (connection === 'open') {
-              this.status = 'CONNECTED';
-              this.pairingCode = null;
-              const userObj = this.socket.user;
-              this.connectedUser = {
-                id: userObj?.id || pairingPhone,
-                name: userObj?.name || pairingPhone
-              };
-              console.log(`WhatsApp connection auto-restored perfectly.`);
-            }
-
-            if (connection === 'close') {
-              const code = (lastDisconnect?.error as any)?.output?.statusCode;
-              if (code === 401) {
-                this.logout();
-              } else if (this.phoneNumber) {
-                setTimeout(() => {
-                  if (this.phoneNumber) this.connect(this.phoneNumber);
-                }, 5000);
-              }
-            }
-          });
-
-          this.socket.ev.on('messages.upsert', (data: any) => {
-            if (data && data.messages) {
-              for (const msg of data.messages) {
-                this.addMessage(msg);
-              }
-            }
-          });
-
-          this.socket.ev.on('messaging-history.set', (data: any) => {
-            if (data && data.messages) {
-              for (const msg of data.messages) {
-                this.addMessage(msg);
-              }
-            }
-          });
+          await this.initSocket(pairingPhone, false);
         }
       } catch (err) {
-        console.error('Auto reconnect error:', err);
+        console.error('Silently failed to auto reconnect:', err);
         this.status = 'DISCONNECTED';
       }
     }

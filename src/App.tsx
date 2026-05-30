@@ -436,18 +436,24 @@ export default function App() {
                 >
                   {pairingCode ? (
                     <div className="space-y-4">
-                      <div className="text-xs text-slate-400 text-left bg-slate-950/80 p-3.5 rounded-xl border border-slate-850">
-                        <p className="font-semibold text-amber-400 flex items-center gap-1.5 mb-1.5">
-                          <Activity className="w-3.5 h-3.5 animate-pulse" />
-                          Masukkan Kode di Ponsel Anda
-                        </p>
-                        <ol className="list-decimal pl-4 space-y-1 text-slate-300">
-                          <li>Buka WhatsApp di ponsel pintar Anda.</li>
-                          <li>Masuk ke <strong className="text-white">Perangkat Tertaut (Linked Devices)</strong>.</li>
-                          <li>Pilih <strong className="text-white">Tautkan Perangkat</strong>.</li>
-                          <li>Ketuk <strong className="text-emerald-400">Tautkan dengan nomor telepon saja</strong> di bagian bawah.</li>
-                          <li>Masukkan kode OTP 8-karakter berikut:</li>
-                        </ol>
+                      <div className="text-xs text-slate-400 text-left bg-slate-950/80 p-3.5 rounded-xl border border-slate-850 space-y-2.5">
+                        <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 rounded-lg text-[11px] leading-relaxed">
+                          <strong>PENTING:</strong> Tidak ada SMS atau notifikasi otomatis yang dikirim ke HP Anda. Anda harus membuka menu <strong>Perangkat Tertaut (Linked Devices)</strong> secara manual di aplikasi WhatsApp HP Anda untuk memasukkan kode ini.
+                        </div>
+                        <div>
+                          <p className="font-semibold text-amber-400 flex items-center gap-1.5 mb-1.5">
+                            <Activity className="w-3.5 h-3.5 animate-pulse" />
+                            Petunjuk Cara Menghubungkan:
+                          </p>
+                          <ol className="list-decimal pl-4 space-y-1 text-slate-300">
+                            <li>Buka aplikasi <strong>WhatsApp</strong> di HP Anda.</li>
+                            <li>Ketuk tombol Menu (titik tiga di kanan atas) atau masuk ke <strong>Pengaturan (Settings)</strong>.</li>
+                            <li>Ketuk menu <strong className="text-white">Perangkat Tertaut (Linked Devices)</strong>.</li>
+                            <li>Ketuk tombol <strong className="text-white">Tautkan Perangkat (Link a Device)</strong>.</li>
+                            <li>Saat kamera scanner terbuka, ketuk <strong className="text-emerald-400 font-bold">Tautkan dengan nomor telepon saja (Link with phone number instead)</strong> di bagian bawah layar HP Anda.</li>
+                            <li>Ketikkan 8 digit kode OTP yang tertera di bawah ini ke HP Anda:</li>
+                          </ol>
+                        </div>
                       </div>
 
                       {/* Display Pairing Code with visual grouping */}
