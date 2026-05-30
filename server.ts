@@ -241,7 +241,7 @@ class WhatsAppManager {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ['Chrome (Linux)', 'Chrome', '114.0.0.0']
+        browser: ['Ubuntu', 'Chrome', '20.0.04']
       });
 
       // Request pairing code only when user initiates a fresh run AND is unregistered
