@@ -1,0 +1,6 @@
+{
+  "name": "WhatsApp Message Reader",
+  "description": "Hubungkan WhatsApp menggunakan kode OTP (Pairing Code) dan baca riwayat serta pesan masuk secara langsung.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
