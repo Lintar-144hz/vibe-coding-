@@ -17,6 +17,8 @@ export interface WAStatusResponse {
   status: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED';
   phoneNumber: string | null;
   pairingCode: string | null;
+  connectionMethod: 'PAIRING' | 'QR' | null;
+  qrCodeDataUrl: string | null;
   error: string | null;
   connectedUser: WAConnectedUser | null;
 }

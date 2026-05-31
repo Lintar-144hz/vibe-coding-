@@ -27,12 +27,15 @@ export default function App() {
   const [status, setStatus] = useState<'DISCONNECTED' | 'CONNECTING' | 'CONNECTED'>('DISCONNECTED');
   const [phoneNumber, setPhoneNumber] = useState("");
   const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [connectionMethod, setConnectionMethod] = useState<'PAIRING' | 'QR' | null>(null);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connectedUser, setConnectedUser] = useState<{ id: string; name: string } | null>(null);
   const [messages, setMessages] = useState<WAMessage[]>([]);
   
   // Local state UI controls
   const [phoneInput, setPhoneInput] = useState("");
+  const [selectedMethodInput, setSelectedMethodInput] = useState<'QR' | 'PAIRING'>('QR');
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<'all' | 'received' | 'sent' | 'media'>('all');
@@ -54,6 +57,8 @@ export default function App() {
       setStatus(data.status);
       setPhoneNumber(data.phoneNumber || "");
       setPairingCode(data.pairingCode);
+      setConnectionMethod(data.connectionMethod);
+      setQrCodeDataUrl(data.qrCodeDataUrl);
       setError(data.error);
       setConnectedUser(data.connectedUser);
     } catch (err) {
@@ -94,17 +99,21 @@ export default function App() {
   }, [messages, selectedContact]);
 
   // Connect request
-  const handleConnect = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!phoneInput) {
-      setError("Masukkan nomor telepon terlebih dahulu");
-      return;
-    }
+  const handleConnect = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    
+    let cleanedPhone = "";
+    if (selectedMethodInput === 'PAIRING') {
+      if (!phoneInput) {
+        setError("Masukkan nomor telepon terlebih dahulu");
+        return;
+      }
 
-    const cleanedPhone = phoneInput.replace(/[^0-9]/g, '');
-    if (cleanedPhone.length < 8) {
-      setError("Nomor telepon tidak valid (minimal 8 angka)");
-      return;
+      cleanedPhone = phoneInput.replace(/[^0-9]/g, '');
+      if (cleanedPhone.length < 8) {
+        setError("Nomor telepon tidak valid (minimal 8 angka)");
+        return;
+      }
     }
 
     setIsLoadingConnect(true);
@@ -114,7 +123,10 @@ export default function App() {
       const response = await fetch("/api/whatsapp/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phoneNumber: cleanedPhone })
+        body: JSON.stringify({ 
+          phoneNumber: selectedMethodInput === 'PAIRING' ? cleanedPhone : undefined,
+          method: selectedMethodInput
+        })
       });
       const data = await response.json();
       if (data.error) {
@@ -123,6 +135,8 @@ export default function App() {
         setStatus(data.status);
         setPairingCode(data.pairingCode);
         setPhoneNumber(data.phoneNumber);
+        setConnectionMethod(data.connectionMethod);
+        setQrCodeDataUrl(data.qrCodeDataUrl);
       }
     } catch (err) {
       setError("Terjadi kesalahan koneksi ke server.");
@@ -381,51 +395,103 @@ export default function App() {
                   className="space-y-4"
                 >
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Sistem ini menyambungkan perangkat WhatsApp Anda menggunakan metode kode OTP (Pairing Code) tanpa memindai QR Code. Silakan masukkan nomor WhatsApp Anda di bawah.
+                    Pilih metode menghubungkan WhatsApp Anda di bawah ini:
                   </p>
 
-                  <form onSubmit={handleConnect} className="space-y-3">
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-slate-400 font-medium">Nomor Telepon WhatsApp</label>
-                      <div className="relative">
-                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-500 font-mono">
-                          ID
-                        </span>
-                        <input
-                          type="text"
-                          value={phoneInput}
-                          onChange={(e) => setPhoneInput(e.target.value)}
-                          placeholder="Contoh: 628123456789"
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 text-xs font-mono text-slate-100 placeholder-slate-650 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                        />
-                      </div>
-                      <p className="text-[10px] text-slate-500 leading-normal">
-                        * Gunakan format internasional tanpa kode '+' atau spasi. Contoh: <strong className="text-slate-400">62812xxxxxx</strong>.
-                      </p>
-                    </div>
-
+                  {/* Tab Selector */}
+                  <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
                     <button
-                      type="submit"
-                      disabled={isLoadingConnect}
-                      className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-500/30 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition shadow-lg shadow-emerald-500/10"
+                      type="button"
+                      onClick={() => setSelectedMethodInput('QR')}
+                      className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                        selectedMethodInput === 'QR'
+                          ? "bg-emerald-500 text-slate-950 font-bold"
+                          : "text-slate-400 hover:text-white"
+                      }`}
                     >
-                      {isLoadingConnect ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                          <span>Menghubungi Server...</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Sambungkan via Kode OTP</span>
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </>
-                      )}
+                      Scan QR Code
                     </button>
-                  </form>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMethodInput('PAIRING')}
+                      className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                        selectedMethodInput === 'PAIRING'
+                          ? "bg-emerald-500 text-slate-950 font-bold"
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      Hubungkan via OTP
+                    </button>
+                  </div>
+
+                  {selectedMethodInput === 'QR' ? (
+                    <div className="space-y-4">
+                      <p className="text-xs text-slate-400 leading-relaxed bg-slate-950/40 p-3 rounded-xl border border-slate-850">
+                        Metode scan **QR Code** adalah metode bawaan resmi WhatsApp Web yang **paling stabil, aman, dan anti-blokir**. Metode ini sangat direkomendasikan jika nomor OTP Anda sering diblokir, dibatasi oleh WhatsApp, atau berjalan di lingkungan VPS / Termux.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => handleConnect()}
+                        disabled={isLoadingConnect}
+                        className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-500/30 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition shadow-lg shadow-emerald-500/10"
+                      >
+                        {isLoadingConnect ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                            <span>Mempersiapkan QR Server...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Tampilkan QR Code</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleConnect} className="space-y-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-slate-400 font-medium">Nomor Telepon WhatsApp</label>
+                        <div className="relative">
+                          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-500 font-mono">
+                            ID
+                          </span>
+                          <input
+                            type="text"
+                            value={phoneInput}
+                            onChange={(e) => setPhoneInput(e.target.value)}
+                            placeholder="Contoh: 628123456789"
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 text-xs font-mono text-slate-100 placeholder-slate-650 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500 leading-normal">
+                          * Gunakan format internasional tanpa kode '+' atau spasi. Contoh: <strong className="text-slate-400">62812xxxxxx</strong>.
+                        </p>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={isLoadingConnect}
+                        className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-500/30 text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition shadow-lg shadow-emerald-500/10"
+                      >
+                        {isLoadingConnect ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                            <span>Menghubungi Server...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Sambungkan via Kode OTP</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  )}
                 </motion.div>
               )}
 
-              {/* STATE: CONNECTING (Generating pairing code) */}
+              {/* STATE: CONNECTING (Generating pairing code or QR code) */}
               {status === "CONNECTING" && (
                 <motion.div
                   key="connecting-panel"
@@ -434,79 +500,140 @@ export default function App() {
                   exit={{ opacity: 0, y: -10 }}
                   className="space-y-4 text-center py-2"
                 >
-                  {pairingCode ? (
-                    <div className="space-y-4">
-                      <div className="text-xs text-slate-400 text-left bg-slate-950/80 p-3.5 rounded-xl border border-slate-850 space-y-2.5">
-                        <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 rounded-lg text-[11px] leading-relaxed">
-                          <strong>PENTING:</strong> Tidak ada SMS atau notifikasi otomatis yang dikirim ke HP Anda. Anda harus membuka menu <strong>Perangkat Tertaut (Linked Devices)</strong> secara manual di aplikasi WhatsApp HP Anda untuk memasukkan kode ini.
-                        </div>
-                        <div>
-                          <p className="font-semibold text-amber-400 flex items-center gap-1.5 mb-1.5">
-                            <Activity className="w-3.5 h-3.5 animate-pulse" />
-                            Petunjuk Cara Menghubungkan:
-                          </p>
-                          <ol className="list-decimal pl-4 space-y-1 text-slate-300">
-                            <li>Buka aplikasi <strong>WhatsApp</strong> di HP Anda.</li>
-                            <li>Ketuk tombol Menu (titik tiga di kanan atas) atau masuk ke <strong>Pengaturan (Settings)</strong>.</li>
-                            <li>Ketuk menu <strong className="text-white">Perangkat Tertaut (Linked Devices)</strong>.</li>
-                            <li>Ketuk tombol <strong className="text-white">Tautkan Perangkat (Link a Device)</strong>.</li>
-                            <li>Saat kamera scanner terbuka, ketuk <strong className="text-emerald-400 font-bold">Tautkan dengan nomor telepon saja (Link with phone number instead)</strong> di bagian bawah layar HP Anda.</li>
-                            <li>Ketikkan 8 digit kode OTP yang tertera di bawah ini ke HP Anda:</li>
-                          </ol>
-                        </div>
-                      </div>
-
-                      {/* Display Pairing Code with visual grouping */}
-                      <div className="bg-slate-950 border border-emerald-900/30 rounded-2xl py-4.5 px-3 flex flex-col items-center gap-2.5 relative">
-                        <span className="text-[10px] text-emerald-400 uppercase tracking-widest font-mono font-bold">KODE OTP ANDA</span>
-                        
-                        <div className="text-stone-100 font-bold text-2xl tracking-widest font-mono text-center select-all select-none">
-                          {pairingCode.slice(0, 4)} - {pairingCode.slice(4)}
+                  {connectionMethod === 'QR' ? (
+                    qrCodeDataUrl ? (
+                      <div className="space-y-4">
+                        <div className="text-xs text-slate-400 text-left bg-slate-950/85 p-3.5 rounded-xl border border-slate-850 space-y-2.5">
+                          <div className="p-2 bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 rounded-lg text-[10.5px] leading-relaxed">
+                            <strong>REKOMENDASI JALUR AMAN:</strong> Jalur QR Code terhindar penuh dari sistem pemfilteran / blokir sandi OTP oleh WhatsApp.
+                          </div>
+                          <div>
+                            <p className="font-semibold text-amber-400 flex items-center gap-1.5 mb-1.5">
+                              <Activity className="w-3.5 h-3.5 animate-pulse" />
+                              Cara Menghubungkan lewat QR:
+                            </p>
+                            <ol className="list-decimal pl-4 space-y-1 text-slate-300">
+                              <li>Buka aplikasi <strong>WhatsApp</strong> di HP Anda.</li>
+                              <li>Ketuk tombol Menu (titik tiga) atau masuk ke <strong>Pengaturan (Settings)</strong>.</li>
+                              <li>Pilih menu <strong className="text-white">Perangkat Tertaut (Linked Devices)</strong>.</li>
+                              <li>Ketuk <strong className="text-white">Tautkan Perangkat (Link a Device)</strong>.</li>
+                              <li>Arahkan kamera HP Anda untuk memindai kode QR di bawah ini.</li>
+                            </ol>
+                          </div>
                         </div>
 
-                        <button
-                          onClick={handleCopyCode}
-                          className="flex items-center gap-1 text-[10px] bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white px-2.5 py-1 rounded-md transition"
-                        >
-                          {copiedCode ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-400" />
-                              <span className="text-emerald-400">Tersalin</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3 h-3" />
-                              <span>Salin Kode</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
+                        {/* Display QR Code */}
+                        <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-center gap-2.5 relative max-w-[240px] mx-auto shadow-xl">
+                          <img 
+                            src={qrCodeDataUrl} 
+                            alt="WhatsApp Web QR Code" 
+                            className="w-full aspect-square object-contain"
+                            referrerPolicy="no-referrer"
+                          />
+                          <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono font-bold">PINDAI QR KODE DI ATAS</span>
+                        </div>
 
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleLogout}
-                          disabled={isLoggingOut}
-                          className="flex-1 bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 hover:text-white py-2 rounded-xl text-xs font-semibold cursor-pointer transition"
-                        >
-                          Batalkan Prosedur
-                        </button>
-                        <button
-                          onClick={fetchStatus}
-                          className="p-2 border border-slate-800 hover:bg-slate-850 text-slate-400 rounded-xl"
-                          title="Cek Status"
-                        >
-                          <RefreshCw className="w-4 h-4" />
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleLogout}
+                            disabled={isLoggingOut}
+                            className="flex-grow bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 hover:text-white py-2 rounded-xl text-xs font-semibold cursor-pointer transition select-none"
+                          >
+                            Batalkan Prosedur
+                          </button>
+                          <button
+                            onClick={fetchStatus}
+                            className="p-2 border border-slate-800 hover:bg-slate-850 text-slate-400 rounded-xl"
+                            title="Cek Status"
+                          >
+                            <RefreshCw className="w-4 h-4 animate-spin-delayed" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-6 space-y-3">
+                        <div className="w-8 h-8 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                        <div className="space-y-1">
+                          <p className="text-xs text-white font-medium">Mempersiapkan QR Code...</p>
+                          <p className="text-[10px] text-slate-500">Meminta kode QR baru dari WhatsApp Websocket Server.</p>
+                        </div>
+                      </div>
+                    )
                   ) : (
-                    <div className="flex flex-col items-center justify-center py-6 space-y-3">
-                      <div className="w-8 h-8 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                      <div className="space-y-1">
-                        <p className="text-xs text-white font-medium">Mempersiapkan Protokol WhatsApp...</p>
-                        <p className="text-[10px] text-slate-500">Meminta kode Pairing baru dari WhatsApp Web Server.</p>
+                    pairingCode ? (
+                      <div className="space-y-4">
+                        <div className="text-xs text-slate-400 text-left bg-slate-950/80 p-3.5 rounded-xl border border-slate-850 space-y-2.5">
+                          <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 rounded-lg text-[11px] leading-relaxed">
+                            <strong>PENTING:</strong> Tidak ada SMS atau notifikasi otomatis yang dikirim ke HP Anda. Anda harus membuka menu <strong>Perangkat Tertaut (Linked Devices)</strong> secara manual di aplikasi WhatsApp HP Anda untuk memasukkan kode ini.
+                          </div>
+                          <div>
+                            <p className="font-semibold text-amber-400 flex items-center gap-1.5 mb-1.5">
+                              <Activity className="w-3.5 h-3.5 animate-pulse" />
+                              Petunjuk Cara Menghubungkan:
+                            </p>
+                            <ol className="list-decimal pl-4 space-y-1 text-slate-300">
+                              <li>Buka aplikasi <strong>WhatsApp</strong> di HP Anda.</li>
+                              <li>Ketuk tombol Menu (titik tiga di kanan atas) atau masuk ke <strong>Pengaturan (Settings)</strong>.</li>
+                              <li>Ketuk menu <strong className="text-white">Perangkat Tertaut (Linked Devices)</strong>.</li>
+                              <li>Ketuk tombol <strong className="text-white">Tautkan Perangkat (Link a Device)</strong>.</li>
+                              <li>Saat kamera scanner terbuka, ketuk <strong className="text-emerald-400 font-bold">Tautkan dengan nomor telepon saja (Link with phone number instead)</strong> di bagian bawah layar HP Anda.</li>
+                              <li>Ketikkan 8 digit kode OTP yang tertera di bawah ini ke HP Anda:</li>
+                            </ol>
+                          </div>
+                        </div>
+
+                        {/* Display Pairing Code with visual grouping */}
+                        <div className="bg-slate-950 border border-emerald-900/30 rounded-2xl py-4.5 px-3 flex flex-col items-center gap-2.5 relative">
+                          <span className="text-[10px] text-emerald-400 uppercase tracking-widest font-mono font-bold">KODE OTP ANDA</span>
+                          
+                          <div className="text-stone-100 font-bold text-2xl tracking-widest font-mono text-center select-all select-none">
+                            {pairingCode.slice(0, 4)} - {pairingCode.slice(4)}
+                          </div>
+
+                          <button
+                            onClick={handleCopyCode}
+                            className="flex items-center gap-1 text-[10px] bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white px-2.5 py-1 rounded-md transition"
+                          >
+                            {copiedCode ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span className="text-emerald-400">Tersalin</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>Salin Kode</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleLogout}
+                            disabled={isLoggingOut}
+                            className="flex-1 bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 hover:text-white py-2 rounded-xl text-xs font-semibold cursor-pointer transition"
+                          >
+                            Batalkan Prosedur
+                          </button>
+                          <button
+                            onClick={fetchStatus}
+                            className="p-2 border border-slate-800 hover:bg-slate-850 text-slate-400 rounded-xl"
+                            title="Cek Status"
+                          >
+                            <RefreshCw className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-6 space-y-3">
+                        <div className="w-8 h-8 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                        <div className="space-y-1">
+                          <p className="text-xs text-white font-medium">Mempersiapkan Protokol WhatsApp...</p>
+                          <p className="text-[10px] text-slate-500">Meminta kode Pairing baru dari WhatsApp Web Server.</p>
+                        </div>
+                      </div>
+                    )
                   )}
                 </motion.div>
               )}

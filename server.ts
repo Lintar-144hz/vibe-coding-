@@ -4,6 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import * as baileys from "@whiskeysockets/baileys";
 import pino from "pino";
+import QRCode from "qrcode";
 
 // Safe extraction helper to prevent bundler inline/default optimizations
 const getWASocket = (): any => {
@@ -44,6 +45,9 @@ class WhatsAppManager {
   status: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' = 'DISCONNECTED';
   phoneNumber: string | null = null;
   pairingCode: string | null = null;
+  connectionMethod: 'PAIRING' | 'QR' | null = null;
+  qrCode: string | null = null;
+  qrCodeDataUrl: string | null = null;
   error: string | null = null;
   socket: any = null;
   connectedUser: WAConnectedUser | null = null;
@@ -187,6 +191,9 @@ class WhatsAppManager {
     this.status = 'DISCONNECTED';
     this.phoneNumber = null;
     this.pairingCode = null;
+    this.connectionMethod = null;
+    this.qrCode = null;
+    this.qrCodeDataUrl = null;
     this.connectedUser = null;
     this.error = null;
 
@@ -216,20 +223,27 @@ class WhatsAppManager {
     console.log('Local logs cleared successfully.');
   }
 
-  async connect(phoneNumber: string) {
-    const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
-    if (!cleanNumber) {
-      throw new Error('Nomor telepon tidak valid. Pastikan hanya berupa angka.');
+  async connect(phoneNumber: string, method: 'PAIRING' | 'QR') {
+    let cleanNumber = '';
+    if (method === 'PAIRING') {
+      cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+      if (!cleanNumber) {
+        throw new Error('Nomor telepon tidak valid. Pastikan hanya berupa angka.');
+      }
     }
 
     // Since this is a manual, fresh user connection request, completely log out past session first
     await this.logout();
 
     this.status = 'CONNECTING';
-    this.phoneNumber = cleanNumber;
+    this.connectionMethod = method;
+    this.phoneNumber = method === 'PAIRING' ? cleanNumber : null;
     this.error = null;
+    this.pairingCode = null;
+    this.qrCode = null;
+    this.qrCodeDataUrl = null;
 
-    await this.initSocket(cleanNumber, true);
+    await this.initSocket(cleanNumber, method === 'PAIRING');
   }
 
   async initSocket(phoneNumber: string, requestNewPairing = false) {
@@ -261,8 +275,18 @@ class WhatsAppManager {
 
       this.socket.ev.on('creds.update', saveCreds);
 
-      this.socket.ev.on('connection.update', (update: any) => {
-        const { connection, lastDisconnect } = update;
+      this.socket.ev.on('connection.update', async (update: any) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr && this.connectionMethod === 'QR') {
+          this.qrCode = qr;
+          try {
+            this.qrCodeDataUrl = await QRCode.toDataURL(qr, { scale: 8, margin: 2 });
+            console.log("QR Code generated as data URL successfully.");
+          } catch (qrErr: any) {
+            console.error("Gagal mengonversi QR ke Data URL:", qrErr);
+          }
+        }
 
         if (connection === 'connecting') {
           if (this.status !== 'CONNECTED') {
@@ -273,11 +297,13 @@ class WhatsAppManager {
         if (connection === 'open') {
           this.status = 'CONNECTED';
           this.pairingCode = null;
+          this.qrCode = null;
+          this.qrCodeDataUrl = null;
           this.error = null;
           const userObj = this.socket.user;
           this.connectedUser = {
-            id: userObj?.id || phoneNumber,
-            name: userObj?.name || phoneNumber
+            id: userObj?.id || phoneNumber || 'User',
+            name: userObj?.name || phoneNumber || 'User'
           };
           console.log(`WhatsApp connection is OPEN. Registered user: ${userObj?.id}`);
         }
@@ -292,12 +318,12 @@ class WhatsAppManager {
           } else {
             // Reconnect using the same credentials and keys.
             // DO NOT delete files! DO NOT call logout()! DO NOT request a new pairing code!
-            if (this.phoneNumber) {
-              console.log(`Disconnected. Reconnecting stream for ${this.phoneNumber} in 4 seconds...`);
+            if (this.phoneNumber || this.connectionMethod === 'QR') {
+              const targetPhone = this.phoneNumber || '';
+              console.log(`Disconnected. Reconnecting stream in 4 seconds...`);
               setTimeout(() => {
-                if (this.phoneNumber) {
-                  // Connect back without requesting a new pairing code (keeps existing code valid on UI if still connecting)
-                  this.initSocket(this.phoneNumber, false);
+                if (this.status !== 'CONNECTED' && (this.phoneNumber || this.connectionMethod === 'QR')) {
+                  this.initSocket(targetPhone, false);
                 }
               }, 4000);
             } else {
@@ -344,12 +370,11 @@ class WhatsAppManager {
         const parsed = JSON.parse(raw);
         const pairingPhone = parsed.me?.id?.split(':')[0] || parsed.me?.id?.split('@')[0];
         
-        if (pairingPhone) {
-          console.log(`Auto reconnecting to phone: ${pairingPhone}`);
-          this.status = 'CONNECTING';
-          this.phoneNumber = pairingPhone;
-          await this.initSocket(pairingPhone, false);
-        }
+        console.log(`Auto reconnecting to WhatsApp...`);
+        this.status = 'CONNECTING';
+        this.phoneNumber = pairingPhone || null;
+        this.connectionMethod = pairingPhone ? 'PAIRING' : 'QR';
+        await this.initSocket(pairingPhone || "", false);
       } catch (err) {
         console.error('Silently failed to auto reconnect:', err);
         this.status = 'DISCONNECTED';
@@ -375,26 +400,28 @@ async function startServer() {
       status: waManager.status,
       phoneNumber: waManager.phoneNumber,
       pairingCode: waManager.pairingCode,
+      connectionMethod: waManager.connectionMethod,
+      qrCodeDataUrl: waManager.qrCodeDataUrl,
       error: waManager.error,
       connectedUser: waManager.connectedUser
     });
   });
 
-  // API - Connect (Request pairing code)
+  // API - Connect (Request pairing code or start QR generation)
   app.post("/api/whatsapp/connect", async (req, res) => {
-    const { phoneNumber } = req.body;
-    if (!phoneNumber) {
-      return res.status(400).json({ error: "Nomor telepon harus diisi" });
-    }
+    const { phoneNumber, method } = req.body;
+    const connectMethod = method || 'PAIRING';
 
     try {
-      console.log(`Received request to connect phone: ${phoneNumber}`);
-      await waManager.connect(phoneNumber);
+      console.log(`Received request to connect via ${connectMethod} (Phone: ${phoneNumber || 'N/A'})`);
+      await waManager.connect(phoneNumber || "", connectMethod);
       res.json({
         success: true,
         status: waManager.status,
         phoneNumber: waManager.phoneNumber,
-        pairingCode: waManager.pairingCode
+        pairingCode: waManager.pairingCode,
+        connectionMethod: waManager.connectionMethod,
+        qrCodeDataUrl: waManager.qrCodeDataUrl
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Gagal menginisiasi WhatsApp pairing" });
